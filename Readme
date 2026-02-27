@@ -1,6 +1,7 @@
-Commands
+Commands to set up and run project
 
 ## Create .venv
+
 ```bash
 python -m venv .venv
 ```
@@ -8,21 +9,31 @@ python -m venv .venv
 To active:
 
 ## Powershell
+
 ```bash
 .\.venv\Scripts\Activate.ps1
 ```
 
 ## Command Prompt
+
 ```bash
 .venv\Scripts\activate.bat
 ```
 
 ## Update pip
+
 ```bash
 python -m pip install --upgrade pip
 ```
 
 ## Installing FastAPI
+
 ```bash
 pip install fastapi uvicorn
+```
+
+## Command to run FastAPI
+
+```bash
+uvicorn main:app --reload
 ```
