@@ -1,1 +1,7 @@
 /.venv
+__pychache__/
+
+.env
+.env.*
+
+.vscode/
