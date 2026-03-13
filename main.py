@@ -47,6 +47,13 @@ FAKE_ITEMS_DB: list[dict] = [
     {"id": 5, "name": "Boots of Swiftness", "description": "Doubles the speed of whoever wears them.", "owner": "bob"},
 ]
 
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
 @app.get("/", tags=["Public"])
 @limiter.limit("60/minute")
 def root(request: Request):
