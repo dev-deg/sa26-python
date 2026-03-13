@@ -30,6 +30,7 @@ python -m pip install --upgrade pip
 
 ```
 pip install fastapi uvicorn
+pip install slowapi
 ```
 
 ## Command to run FastAPI

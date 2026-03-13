@@ -1,6 +1,12 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+#Setup rate limiting
+limiter = Limiter(key_func=get_remote_address)
 
 # Pydantic models
 
@@ -16,6 +22,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 FAKE_ITEMS_DB: list[dict] = [
     {"id": 1, "name": "Sword of Destiny", "description": "A legendary blade forged in dragon fire.", "owner": "alice"},
     {"id": 2, "name": "Shield of Valor", "description": "An unbreakable shield blessed by the gods.", "owner": "bob"},
@@ -25,12 +34,14 @@ FAKE_ITEMS_DB: list[dict] = [
 ]
 
 @app.get("/", tags=["Public"])
-def root():
+@limiter.limit("60/minute")
+def root(request: Request):
     """Health-check - no authentication required"""
     return {"status": "ok", "message": "Secure API Demo is running!"}
 
 @app.get("/public/status", tags=["Public"])
-def public_status():
+@limiter.limit("60/minute")
+def public_status(request: Request):
     """Returns basic API status information - publicly accessible"""
     return {
         "api": "Secure API Demo",
@@ -39,11 +50,11 @@ def public_status():
     }
 
 @app.get("/public/items", tags=["Public"], response_model=list[Item])
-def list_public_items():
+def list_public_items(request: Request):
     """Returns a list of public items - publicly accessible"""
     return FAKE_ITEMS_DB
 
 @app.get("/public/items/search", tags=["Public"], response_model=list[Item])
-def search_public_items(name: str):
+def search_public_items(request: Request, name: str):
     """Search for public items by name - publicly accessible"""
     return [item for item in FAKE_ITEMS_DB if name.lower() in item["name"].lower()]
