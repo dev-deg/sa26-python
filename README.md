@@ -29,9 +29,7 @@ python -m pip install --upgrade pip
 ## Installing FastAPI
 
 ```
-pip install fastapi uvicorn
-pip install slowapi
-pip install python-jose bcrypt
+pip install -r requirements.txt
 ```
 
 ## Command to run FastAPI
