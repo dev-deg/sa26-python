@@ -36,6 +36,10 @@ class Item(BaseModel):
     description: str
     owner: str
 
+class ItemCreate(BaseModel):
+    name: str
+    description: str
+
 app = FastAPI(
     title="Secure API Demo",
     description="Demonstrates public and JWT-secured endpoints with FastAPI",
@@ -111,3 +115,12 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 def list_secure_items(request: Request, token: str = Depends(oauth2_scheme)):
     """Returns a list of secure items - authentication required"""
     return FAKE_ITEMS_DB
+
+@app.post("/secure/items", tags=["Secured"], response_model=dict)
+@limiter.limit("60/minute")
+def create_secure_item(request: Request, itemCreate: ItemCreate, token: str = Depends(oauth2_scheme)):
+    """Creates a new secure item - authentication required"""
+    new_id = max(item["id"] for item in FAKE_ITEMS_DB) + 1 if FAKE_ITEMS_DB else 1
+    item = Item(id=new_id, name=itemCreate.name, description=itemCreate.description, owner=USERNAME)
+    FAKE_ITEMS_DB.append(item.dict())
+    return {"message": "Secure item created", "item": item}
