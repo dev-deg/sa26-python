@@ -89,7 +89,7 @@ def search_public_items(request: Request, name: str):
     return [item for item in FAKE_ITEMS_DB if name.lower() in item["name"].lower()]
 
 @app.post("/auth/token", tags=["Auth"])
-@limiter.limit("60/minute")
+@limiter.limit("5/minute")
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     """Login and return a JWT token"""
     # In a real app, we would need to query the database for the user and verify the password
@@ -103,3 +103,11 @@ def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
         )
     access_token = create_access_token(data={"sub": form_data.username}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     return {"access_token": access_token, "token_type": "bearer"}
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
+
+@app.get("/secure/items", tags=["Secured"], response_model=list[Item])
+@limiter.limit("60/minute")
+def list_secure_items(request: Request, token: str = Depends(oauth2_scheme)):
+    """Returns a list of secure items - authentication required"""
+    return FAKE_ITEMS_DB
