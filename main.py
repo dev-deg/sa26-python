@@ -1,5 +1,10 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, Request
+
+from fastapi import FastAPI, Request, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+
+from jose import JWTError, jwt
+
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded

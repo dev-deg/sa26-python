@@ -31,10 +31,17 @@ python -m pip install --upgrade pip
 ```
 pip install fastapi uvicorn
 pip install slowapi
+pip install jose bcrypt
 ```
 
 ## Command to run FastAPI
 
 ```
 uvicorn main:app --reload
+```
+
+## Command to generate a new secret key
+
+```python
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
