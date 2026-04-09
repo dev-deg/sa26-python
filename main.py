@@ -15,6 +15,8 @@ from passlib.context import CryptContext
 from dotenv import load_dotenv
 import os
 
+from loguru import logger
+
 load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -56,6 +58,13 @@ FAKE_ITEMS_DB: list[dict] = [
     {"id": 4, "name": "Staff of Wisdom", "description": "Grants its wielder vast arcane knowledge.", "owner": "charlie"},
     {"id": 5, "name": "Boots of Swiftness", "description": "Doubles the speed of whoever wears them.", "owner": "bob"},
 ]
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"{request.method} {request.url.path}")
+    response = await call_next(request)   # ← route runs here
+    logger.info(f"Status: {response.status_code}")
+    return response
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
