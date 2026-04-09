@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 import os
 
 from loguru import logger
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
@@ -64,6 +65,25 @@ async def log_requests(request: Request, call_next):
     logger.info(f"{request.method} {request.url.path}")
     response = await call_next(request)   # ← route runs here
     logger.info(f"Status: {response.status_code}")
+    return response
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],                       # ← only this origin - UPDATE for Production!
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],           # ← only these methods
+    allow_headers=["*"],
+)
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    # Stop browsers guessing the content type
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Block this page being embedded in an iframe
+    response.headers["X-Frame-Options"] = "DENY"
+    # Restrict where scripts can be loaded from
+    # response.headers["Content-Security-Policy"] = "default-src 'self'"
     return response
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
