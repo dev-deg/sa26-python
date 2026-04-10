@@ -1,0 +1,16 @@
+2026-04-10 14:20:18.420 | INFO     | main:log_requests:95 - GET /docs
+2026-04-10 14:20:18.421 | INFO     | main:log_requests:97 - Status: 200
+2026-04-10 14:20:18.464 | INFO     | main:log_requests:95 - GET /openapi.json
+2026-04-10 14:20:18.479 | INFO     | main:log_requests:97 - Status: 200
+2026-04-10 14:23:27.867 | INFO     | main:log_requests:95 - GET /docs
+2026-04-10 14:23:27.867 | INFO     | main:log_requests:97 - Status: 200
+2026-04-10 14:23:27.926 | INFO     | main:log_requests:95 - GET /openapi.json
+2026-04-10 14:23:27.927 | INFO     | main:log_requests:97 - Status: 200
+2026-04-10 14:23:33.248 | INFO     | main:log_requests:95 - GET /public/items
+2026-04-10 14:23:33.251 | INFO     | main:log_requests:97 - Status: 200
+2026-04-10 14:23:34.083 | INFO     | main:log_requests:95 - GET /public/items
+2026-04-10 14:23:34.085 | INFO     | main:log_requests:97 - Status: 200
+2026-04-10 14:23:38.977 | INFO     | main:log_requests:95 - GET /secure/items
+2026-04-10 14:23:38.978 | INFO     | main:log_requests:97 - Status: 401
+2026-04-10 14:23:39.731 | INFO     | main:log_requests:95 - GET /secure/items
+2026-04-10 14:23:39.732 | INFO     | main:log_requests:97 - Status: 401

@@ -1,4 +1,7 @@
+import logging
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -19,6 +22,33 @@ from loguru import logger
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
+
+# ── Logging setup (must happen before FastAPI / uvicorn touch anything) ───────
+
+# Step 1: silence uvicorn's stdlib-based logger
+logging.getLogger("uvicorn").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
+
+# Step 2: remove loguru's default stderr handler (ALWAYS do this first)
+logger.remove()
+
+# Step 3: console — INFO and above
+logger.add(
+    sys.stdout,
+    level="INFO",
+    colorize=True,
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {name}:{line} | {message}",
+)
+
+# Step 4: rolling file — async write so disk never blocks responses
+logger.add(
+    str(Path(__file__).parent / "logs" / "log-{time:YYYYMMDD}.txt"),
+    rotation="1 day",
+    level="INFO",
+    enqueue=True,
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM","HS256")
