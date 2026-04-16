@@ -4,4 +4,9 @@ __pycache__/
 .env
 .env.*
 
+# demo_files contains fake credentials intentionally committed for teaching
+# Real .env is excluded above — demo_files/fake_secrets.env is safe to commit
+
 .vscode/
+.python-version
+*.log

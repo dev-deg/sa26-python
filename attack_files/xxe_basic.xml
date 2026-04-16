@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  XXE ATTACK FILE #1 - Basic File Read
+  =====================================
+  This payload attempts to read /etc/passwd on Unix systems.
+
+  HOW IT WORKS:
+  1. The DOCTYPE declares an external entity named "xxe"
+  2. The SYSTEM keyword tells the parser to load the entity from a URI
+  3. "file:///etc/passwd" points to the local file system
+  4. When &xxe; is referenced in the document, the parser substitutes
+     the file contents in its place
+  5. A vulnerable server returns those file contents in the response
+
+  WHAT TO LOOK FOR:
+  - A vulnerable endpoint returns the contents of /etc/passwd
+  - A secure endpoint returns an error or sanitized output
+
+  PLATFORM NOTES:
+  - Mac/Linux: file:///etc/passwd (this file)
+  - Windows:   replace with file:///C:/Windows/System32/drivers/etc/hosts
+
+  For a cross-platform demo that targets fake credentials instead, use:
+    curl -X POST "http://localhost:8000/vuln/xxe?demo=secrets"
+
+  See the home page at http://localhost:8000 for all curl and PowerShell commands.
+-->
+<!DOCTYPE foo [
+  <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<item>
+  <name>Test Item</name>
+  <description>&xxe;</description>
+</item>

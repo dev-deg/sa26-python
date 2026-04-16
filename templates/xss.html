@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XSS Demo &mdash; {% if vulnerable %}VULNERABLE{% else %}SECURE{% endif %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    /* Page-specific overrides */
+    body { background: #f4f6f8; }
+
+    .xss-card {
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+
+    .xss-banner {
+      padding: 18px 28px;
+      color: white;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .xss-banner.vuln { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+    .xss-banner.safe { background: linear-gradient(135deg, #27ae60, #1e8449); }
+
+    .xss-banner .icon { font-size: 1.8rem; line-height: 1; }
+
+    .xss-banner h1 { font-size: 1.2rem; margin: 0; }
+    .xss-banner p  { font-size: 0.82rem; opacity: 0.85; margin: 2px 0 0; }
+
+    .xss-body { padding: 24px 28px; }
+
+    .greeting {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 12px;
+      word-break: break-all;
+    }
+
+    .explanation {
+      font-size: 0.9rem;
+      color: #555;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+
+    .rendered-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #999;
+      margin-bottom: 8px;
+    }
+
+    .mechanism {
+      background: #f8f9fb;
+      border: 1px solid #dde3ea;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+      font-size: 0.87rem;
+      color: #444;
+    }
+
+    .mechanism strong { color: #1a1a2e; }
+
+    .nav-links { font-size: 0.88rem; }
+    .nav-links a { color: #2980b9; text-decoration: none; margin-right: 16px; }
+    .nav-links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Web Security Lab &mdash; XSS Demo</h1>
+  <p>Observe how escaping (or the lack of it) determines whether injected code executes</p>
+</header>
+
+<div class="container" style="max-width: 720px;">
+
+  <div class="xss-card">
+    {% if vulnerable %}
+    <div class="xss-banner vuln">
+      <div class="icon">&#128683;</div>
+      <div>
+        <h1>VULNERABLE &mdash; No escaping applied</h1>
+        <p>Raw user input injected directly into HTML &mdash; scripts execute in the browser</p>
+      </div>
+    </div>
+    {% else %}
+    <div class="xss-banner safe">
+      <div class="icon">&#128994;</div>
+      <div>
+        <h1>SECURE &mdash; Jinja2 auto-escaping applied</h1>
+        <p>Input encoded before rendering &mdash; tags appear as plain text, never as markup</p>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="xss-body">
+
+      <!-- ── The vulnerable/secure greeting ── -->
+      <div class="rendered-label">Output &mdash; what the browser received</div>
+      <div class="greeting">
+        Hello,
+        {% if vulnerable %}
+          {{ name | safe }}{# VULNERABLE: | safe bypasses Jinja2 auto-escaping — raw HTML injected #}
+        {% else %}
+          {{ name }}{# SECURE: Jinja2 auto-escapes by default — < > " are encoded #}
+        {% endif %}
+        !
+      </div>
+
+      <!-- ── How it works explanation ── -->
+      <div class="mechanism">
+        {% if vulnerable %}
+          <strong>Why this is vulnerable:</strong> The <code>name</code> value is passed to the template
+          with the <code>| safe</code> filter, which tells Jinja2 to trust the string and inject it
+          without encoding. Any <code>&lt;script&gt;</code> tag or event handler becomes live HTML
+          and executes immediately. The cookies on this page are set <em>without</em>
+          <code>HttpOnly</code> &mdash; so <code>document.cookie</code> exposes them to the injected script.
+        {% else %}
+          <strong>Why this is secure:</strong> Jinja2 auto-escapes all variables by default.
+          <code>&lt;</code> becomes <code>&amp;lt;</code>, <code>&gt;</code> becomes <code>&amp;gt;</code>,
+          and so on &mdash; the browser renders them as visible text, never as markup.
+          The cookies on this page are set with <code>HttpOnly=True</code>, so even if XSS were
+          somehow possible, <code>document.cookie</code> would return an empty string.
+        {% endif %}
+      </div>
+
+      <!-- ── Raw value display ── -->
+      <div class="rendered-label">Raw value received from query string</div>
+      <div class="code-block" style="margin-bottom: 20px;">
+        <pre>{{ name }}</pre>
+      </div>
+
+      <!-- ── Nav ── -->
+      <div class="nav-links">
+        {% if vulnerable %}
+          <a href="/secure/xss?name={{ name | urlencode }}">Switch to SECURE version &rarr;</a>
+        {% else %}
+          <a href="/vuln/xss?name={{ name | urlencode }}">Switch to VULNERABLE version &rarr;</a>
+        {% endif %}
+        <a href="/">&#8592; Home</a>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Try it box ── -->
+  <div class="xss-card">
+    <div class="xss-body">
+      <h4 style="margin-bottom: 12px;">&#128270; Try these payloads</h4>
+      {% if vulnerable %}
+      <div class="code-block">
+        <div class="label">Cookie theft &mdash; paste into browser</div>
+        <pre>http://localhost:8000/vuln/xss?name=&lt;script&gt;alert(document.cookie)&lt;/script&gt;</pre>
+      </div>
+      <div class="code-block">
+        <div class="label">Image onerror handler</div>
+        <pre>http://localhost:8000/vuln/xss?name=&lt;img src=x onerror="alert('XSS')"&gt;</pre>
+      </div>
+      {% else %}
+      <div class="code-block">
+        <div class="label">Same payloads &mdash; rendered as harmless text on this page</div>
+        <pre>http://localhost:8000/secure/xss?name=&lt;script&gt;alert(document.cookie)&lt;/script&gt;</pre>
+      </div>
+      <div class="code-block">
+        <div class="label">Image onerror handler (also neutralised)</div>
+        <pre>http://localhost:8000/secure/xss?name=&lt;img src=x onerror="alert('XSS')"&gt;</pre>
+      </div>
+      {% endif %}
+      <p style="font-size:0.85rem; color:#777; margin-top: 12px;">
+        More payloads and filter-bypass techniques in <code>attack_files/xss_payloads.txt</code>
+      </p>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

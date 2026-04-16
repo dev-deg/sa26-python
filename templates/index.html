@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Securing Applications Demo &mdash; XXE &amp; XSS</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Securing Applications Lab &mdash; XXE &amp; XSS</h1>
+  <p>Intentionally vulnerable endpoints for educational use. Compare each attack against its secure counterpart.</p>
+</header>
+
+<div class="container">
+
+  <!-- ── XSS Section ─────────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header xss">
+      <div class="icon">&#128737;</div>
+      <div>
+        <h2>XSS &mdash; Cross-Site Scripting</h2>
+        <p>Injecting malicious JavaScript into pages viewed by other users</p>
+      </div>
+    </div>
+
+    <div class="section-body">
+      <p>XSS occurs when a server reflects user-supplied input back into HTML <strong>without escaping it</strong>.
+      The attacker does not need server access &mdash; they exploit the application&rsquo;s failure to treat
+      user input as data rather than code.</p>
+
+      <div class="how-it-works">
+        <div class="how-box">
+          <h3>&#128683; How the attack works</h3>
+          <ol>
+            <li>Attacker finds a URL param or input field reflected in the page.</li>
+            <li>Injects a <code>&lt;script&gt;</code> tag or event handler (<code>onerror</code>, <code>onload</code>).</li>
+            <li>Server echoes the payload <em>unescaped</em> into the HTML response.</li>
+            <li>Victim&rsquo;s browser executes the injected script.</li>
+            <li>Script steals cookies, exfiltrates data, or hijacks the session.</li>
+          </ol>
+        </div>
+        <div class="how-box">
+          <h3>&#128994; Why cookies matter here</h3>
+          <ol>
+            <li>Both demo pages set fake <code>session_id</code> and <code>user_role</code> cookies.</li>
+            <li>The <strong>vulnerable</strong> page sets them <em>without</em> <code>HttpOnly</code> &mdash; JS can read them.</li>
+            <li>The <strong>secure</strong> page sets them <em>with</em> <code>HttpOnly=True</code> &mdash; JS is blind.</li>
+            <li><code>alert(document.cookie)</code> shows the difference instantly.</li>
+          </ol>
+        </div>
+      </div>
+
+      <h4>Demo endpoints</h4>
+      <table class="endpoint-table">
+        <tr><th>Endpoint</th><th>Type</th><th>What to observe</th></tr>
+        <tr>
+          <td><a href="/vuln/xss?name=World">/vuln/xss?name=World</a></td>
+          <td><span class="badge badge-vuln">VULNERABLE</span></td>
+          <td>Raw input injected into HTML &mdash; scripts execute</td>
+        </tr>
+        <tr>
+          <td><a href="/secure/xss?name=World">/secure/xss?name=World</a></td>
+          <td><span class="badge badge-safe">SECURE</span></td>
+          <td>Jinja2 auto-escaping applied &mdash; tags rendered as text</td>
+        </tr>
+      </table>
+
+      <h4>Try it &mdash; paste into browser address bar</h4>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <span class="cmd-tab-label">browser</span>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane">
+          <pre>http://localhost:8000/vuln/xss?name=&lt;script&gt;alert(document.cookie)&lt;/script&gt;</pre>
+        </div>
+      </div>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <span class="cmd-tab-label">browser &mdash; secure page (same payload, no alert)</span>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane">
+          <pre>http://localhost:8000/secure/xss?name=&lt;script&gt;alert(document.cookie)&lt;/script&gt;</pre>
+        </div>
+      </div>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <button class="cmd-tab active" onclick="switchTab(this, 'curl')">curl</button>
+          <button class="cmd-tab" onclick="switchTab(this, 'pwsh')">PowerShell</button>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane" data-shell="curl">
+          <pre>curl -G "http://localhost:8000/vuln/xss" --data-urlencode "name=&lt;script&gt;alert('XSS')&lt;/script&gt;"</pre>
+        </div>
+        <div class="cmd-pane" data-shell="pwsh" hidden>
+          <pre>Invoke-WebRequest -Uri "http://localhost:8000/vuln/xss?name=%3Cscript%3Ealert('XSS')%3C%2Fscript%3E" | Select-Object -Expand Content</pre>
+        </div>
+      </div>
+
+      <div class="tips">
+        <h4>&#128272; Defense techniques</h4>
+        <ul>
+          <li><strong>Escape all output</strong> &mdash; Python: <code>html.escape()</code>; Jinja2 auto-escapes by default.</li>
+          <li><strong>Content-Security-Policy</strong> header restricts which scripts browsers will run.</li>
+          <li><strong>HttpOnly cookies</strong> make session tokens invisible to JavaScript.</li>
+          <li><strong>Never use string concatenation</strong> to build HTML &mdash; use a template engine.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── XXE Section ─────────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header xxe">
+      <div class="icon">&#128268;</div>
+      <div>
+        <h2>XXE &mdash; XML External Entity</h2>
+        <p>Abusing XML parsers to read local files, perform SSRF, or crash servers</p>
+      </div>
+    </div>
+
+    <div class="section-body">
+      <p>XXE occurs when an XML parser is configured to process <strong>external entity references</strong>
+      declared in a DTD. An attacker can point an entity at <code>file:///etc/passwd</code> and the parser
+      substitutes the file contents directly into the document &mdash; which the application then returns.</p>
+
+      <div class="how-it-works">
+        <div class="how-box">
+          <h3>&#128683; How the attack works</h3>
+          <ol>
+            <li>Attacker crafts XML with a DOCTYPE declaring an external entity.</li>
+            <li>Entity <code>SYSTEM</code> URI points to a local file or internal URL.</li>
+            <li>Vulnerable parser resolves the entity, reading the file.</li>
+            <li>File contents are substituted into the document.</li>
+            <li>Application returns the parsed result &mdash; leaking the file.</li>
+          </ol>
+        </div>
+        <div class="how-box">
+          <h3>&#128680; Three attack variants</h3>
+          <ol>
+            <li><strong>File read</strong> &mdash; exfiltrate <code>/etc/passwd</code>, SSH keys, config files.</li>
+            <li><strong>Secret theft</strong> &mdash; read <code>.env</code> to steal JWT secrets and DB credentials.</li>
+            <li><strong>Billion laughs</strong> &mdash; recursive entity expansion causes ~3&nbsp;GB RAM spike (DoS).</li>
+          </ol>
+        </div>
+      </div>
+
+      <h4>Demo endpoints</h4>
+      <table class="endpoint-table">
+        <tr><th>Endpoint</th><th>Type</th><th>What to observe</th></tr>
+        <tr>
+          <td><code>POST /vuln/xxe</code></td>
+          <td><span class="badge badge-vuln">VULNERABLE</span></td>
+          <td><code>lxml</code> with <code>resolve_entities=True</code> &mdash; file contents returned</td>
+        </tr>
+        <tr>
+          <td><code>POST /secure/xxe</code></td>
+          <td><span class="badge badge-safe">SECURE</span></td>
+          <td><code>defusedxml</code> &mdash; entity blocked, error returned</td>
+        </tr>
+      </table>
+
+      <h4>Attack files (in <code>attack_files/</code>)</h4>
+      <div class="files-grid">
+        <div class="file-card">
+          <div class="filename">xxe_basic.xml</div>
+          <div class="desc">File read &mdash; <code>/etc/passwd</code></div>
+        </div>
+        <div class="file-card">
+          <div class="filename">xxe_app_secrets.xml</div>
+          <div class="desc">File read &mdash; <code>.env</code> (JWT secret, DB creds)</div>
+        </div>
+        <div class="file-card">
+          <div class="filename">xxe_billion_laughs.xml</div>
+          <div class="desc">DoS &mdash; recursive expansion, ~3&nbsp;GB RAM</div>
+        </div>
+        <div class="file-card">
+          <div class="filename">xss_payloads.txt</div>
+          <div class="desc">XSS cheat sheet with filter-bypass techniques</div>
+        </div>
+      </div>
+
+      <h4>Try it &mdash; cross-platform (Mac, Windows, Linux)</h4>
+      <p style="font-size:0.85rem;color:#555;margin-bottom:12px;">
+        The <code>?demo=secrets</code> flag makes the server build a payload targeting
+        <code>demo_files/fake_secrets.env</code> with the correct absolute path for your OS.
+        No real credentials are exposed.
+      </p>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <button class="cmd-tab active" onclick="switchTab(this, 'curl')">curl</button>
+          <button class="cmd-tab" onclick="switchTab(this, 'pwsh')">PowerShell</button>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane" data-shell="curl">
+          <pre>curl -X POST "http://localhost:8000/vuln/xxe?demo=secrets"</pre>
+        </div>
+        <div class="cmd-pane" data-shell="pwsh" hidden>
+          <pre>Invoke-RestMethod -Method Post -Uri "http://localhost:8000/vuln/xxe?demo=secrets"</pre>
+        </div>
+      </div>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <button class="cmd-tab active" onclick="switchTab(this, 'curl')">curl</button>
+          <button class="cmd-tab" onclick="switchTab(this, 'pwsh')">PowerShell</button>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane" data-shell="curl">
+          <pre>curl -X POST "http://localhost:8000/secure/xxe?demo=secrets"</pre>
+        </div>
+        <div class="cmd-pane" data-shell="pwsh" hidden>
+          <pre>Invoke-RestMethod -Method Post -Uri "http://localhost:8000/secure/xxe?demo=secrets"</pre>
+        </div>
+      </div>
+
+      <h4>Try it &mdash; billion laughs DoS (all platforms)</h4>
+      <p style="font-size:0.85rem;color:#555;margin-bottom:12px;">
+        Sends a recursive entity payload. Both endpoints block it &mdash; but for different reasons,
+        which is the interesting part. The <strong>secure</strong> endpoint is stopped by
+        <code>defusedxml</code> at the Python layer. The <strong>vulnerable</strong> endpoint is stopped
+        by <code>libxml2</code>'s built-in C-level amplification limit &mdash; a defence that many
+        older parsers (PHP SimpleXML, Java DocumentBuilder) do not have, making them truly exploitable.
+      </p>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <button class="cmd-tab active" onclick="switchTab(this, 'curl')">curl</button>
+          <button class="cmd-tab" onclick="switchTab(this, 'pwsh')">PowerShell</button>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane" data-shell="curl">
+          <pre>curl -X POST "http://localhost:8000/secure/xxe?demo=billion_laughs"</pre>
+        </div>
+        <div class="cmd-pane" data-shell="pwsh" hidden>
+          <pre>Invoke-RestMethod -Method Post -Uri "http://localhost:8000/secure/xxe?demo=billion_laughs"</pre>
+        </div>
+      </div>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <button class="cmd-tab active" onclick="switchTab(this, 'curl')">curl</button>
+          <button class="cmd-tab" onclick="switchTab(this, 'pwsh')">PowerShell</button>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane" data-shell="curl">
+          <pre>curl -X POST "http://localhost:8000/vuln/xxe?demo=billion_laughs"</pre>
+        </div>
+        <div class="cmd-pane" data-shell="pwsh" hidden>
+          <pre>Invoke-RestMethod -Method Post -Uri "http://localhost:8000/vuln/xxe?demo=billion_laughs"</pre>
+        </div>
+      </div>
+
+      <h4>Try it &mdash; static XML files (Mac / Linux only)</h4>
+      <p style="font-size:0.85rem;color:#555;margin-bottom:12px;">
+        These target Unix paths (<code>/etc/passwd</code>). On Windows, edit the <code>SYSTEM</code>
+        URI in the XML file to <code>file:///C:/Windows/System32/drivers/etc/hosts</code>.
+      </p>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <button class="cmd-tab active" onclick="switchTab(this, 'curl')">curl</button>
+          <button class="cmd-tab" onclick="switchTab(this, 'pwsh')">PowerShell</button>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane" data-shell="curl">
+          <pre>curl -X POST http://localhost:8000/vuln/xxe -H "Content-Type: application/xml" --data-binary @attack_files/xxe_basic.xml</pre>
+        </div>
+        <div class="cmd-pane" data-shell="pwsh" hidden>
+          <pre>Invoke-RestMethod -Method Post -Uri "http://localhost:8000/vuln/xxe" -ContentType "application/xml" -InFile "attack_files\xxe_basic.xml"</pre>
+        </div>
+      </div>
+
+      <div class="cmd-group">
+        <div class="cmd-tabs">
+          <button class="cmd-tab active" onclick="switchTab(this, 'curl')">curl</button>
+          <button class="cmd-tab" onclick="switchTab(this, 'pwsh')">PowerShell</button>
+          <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+        </div>
+        <div class="cmd-pane" data-shell="curl">
+          <pre>curl -X POST http://localhost:8000/secure/xxe -H "Content-Type: application/xml" --data-binary @attack_files/xxe_basic.xml</pre>
+        </div>
+        <div class="cmd-pane" data-shell="pwsh" hidden>
+          <pre>Invoke-RestMethod -Method Post -Uri "http://localhost:8000/secure/xxe" -ContentType "application/xml" -InFile "attack_files\xxe_basic.xml"</pre>
+        </div>
+      </div>
+
+      <div class="tips">
+        <h4>&#128272; Defense techniques</h4>
+        <ul>
+          <li><strong>Use <code>defusedxml</code></strong> &mdash; drop-in stdlib replacement; blocks all XXE and DoS variants.</li>
+          <li><strong>Disable DTDs in lxml</strong> &mdash; <code>XMLParser(resolve_entities=False, load_dtd=False)</code>.</li>
+          <li><strong>Prefer JSON</strong> over XML for APIs where XML isn&rsquo;t required.</li>
+          <li><strong>Validate structure</strong> before parsing &mdash; reject unexpected DOCTYPEs at the application layer.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Links ───────────────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-header info">
+      <div class="icon">&#128203;</div>
+      <div>
+        <h2>API Reference</h2>
+        <p>Full interactive documentation for all endpoints</p>
+      </div>
+    </div>
+    <div class="links-row">
+      <a class="link-btn primary" href="/docs">Swagger UI &rarr;</a>
+      <a class="link-btn secondary" href="/redoc">ReDoc &rarr;</a>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+  function switchTab(btn, shell) {
+    const group = btn.closest('.cmd-group');
+    group.querySelectorAll('.cmd-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    group.querySelectorAll('.cmd-pane').forEach(p => {
+      p.hidden = p.dataset.shell !== shell;
+    });
+  }
+
+  function copyCmd(btn) {
+    const group = btn.closest('.cmd-group');
+    const pane = group.querySelector('.cmd-pane:not([hidden])') || group.querySelector('.cmd-pane');
+    navigator.clipboard.writeText(pane.querySelector('pre').textContent.trim()).then(() => {
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    });
+  }
+</script>
+</body>
+</html>
