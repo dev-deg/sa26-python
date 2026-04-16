@@ -10,6 +10,9 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 from jose import JWTError, jwt
 
+from lxml import etree
+import defusedxml.ElementTree as safe_xml
+
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -188,3 +191,146 @@ def create_secure_item(request: Request, itemCreate: ItemCreate, token: str = De
     item = Item(id=new_id, name=itemCreate.name, description=itemCreate.description, owner=USERNAME)
     FAKE_ITEMS_DB.append(item.dict())
     return {"message": "Secure item created", "item": item}
+
+
+# -- XSS DEMO ENDPOINT (for testing only, do not use in production)
+
+@app.get("/vuln/xss", tags=["Vulnerable"])
+@limiter.limit("60/minute")
+def vulnerable_xss(request: Request, name: str = "World"):
+    """A vulnerable endpoint that reflects user input without sanitization (for testing only)"""
+    response = templates.TemplateResponse(
+        "xss.html", {"request": request, "name": name, "vulnerable": True}
+        )
+    
+    # Fake session cookie - to test XSS
+    response.set_cookie("session_id", "a688b9898ef7ca683b1bdac9c8d9a5c39536977d70a2895a7fc9352df0997dfa") # ← this cookie is not HttpOnly, so it can be stolen by XSS
+    response.set_cookie("user_role", "admin")  # ← this cookie is not HttpOnly, so it can be stolen by XSS
+
+    return response
+
+@app.get("/secure/xss", tags=["Vulnerable"])
+@limiter.limit("60/minute")
+def vulnerable_xss(request: Request, name: str = "World"):
+    """A vulnerable endpoint that reflects user input without sanitization (for testing only)"""
+    response = templates.TemplateResponse(
+        "xss.html", {"request": request, "name": name, "vulnerable": False}
+        )
+    
+    # Fake session cookie - to test XSS
+    response.set_cookie("session_id", "a688b9898ef7ca683b1bdac9c8d9a5c39536977d70a2895a7fc9352df0997dfa") # ← this cookie is not HttpOnly, so it can be stolen by XSS
+    response.set_cookie("user_role", "admin")  # ← this cookie is not HttpOnly, so it can be stolen by XSS
+    return response
+
+# ── XXE Demo Endpoints ────────────────────────────────────────────────────────
+
+def _extract_xml_text(root) -> dict:
+    """Walk an XML element tree and collect tag → text pairs."""
+    result = {}
+    for elem in root.iter():
+        if elem.text and elem.text.strip():
+            result[elem.tag] = elem.text.strip()
+    return result
+
+
+_DEMO_TARGETS = {
+    "secrets": Path(__file__).parent / "demo_files" / "fake_secrets.env",
+    "billion_laughs": Path(__file__).parent / "attack_files" / "xxe_billion_laughs.xml",
+}
+
+def _build_demo_payload(target: Path) -> bytes:
+    """Generate an XXE payload that reads target using the correct absolute URI for this OS."""
+    uri = target.as_uri()   # file:///absolute/path — works on Windows and Unix
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<!DOCTYPE item [<!ENTITY secret SYSTEM "{uri}">]>'
+        f"<item><name>Demo Attack</name><description>&secret;</description></item>"
+    ).encode()
+
+
+@app.post("/vuln/xxe", tags=["Vulnerable - Educational"])
+@limiter.limit("20/minute")
+async def vulnerable_xxe(request: Request, demo: str | None = None):
+    """
+    VULNERABLE: Parses XML using lxml with external entity resolution enabled.
+
+    Pass ?demo=secrets to auto-generate a cross-platform payload that reads
+    demo_files/fake_secrets.env (contains fake credentials — no real secrets).
+
+    curl -X POST "http://localhost:8000/vuln/xxe?demo=secrets"
+    """
+    if demo:
+        target = _DEMO_TARGETS.get(demo)
+        if not target:
+            return {"error": f"Unknown demo target '{demo}'. Available: {list(_DEMO_TARGETS)}"}
+        if demo == "billion_laughs":
+            body = target.read_bytes()          # send the raw XML bomb as-is
+        else:
+            body = _build_demo_payload(target)  # wrap file path in an entity
+    else:
+        body = await request.body()
+
+    try:
+        # VULNERABLE: resolve_entities=True + load_dtd=True allows XXE file reads
+        parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=True)
+        root = etree.fromstring(body, parser)
+        return {
+            "warning": "VULNERABLE endpoint — external entities were resolved",
+            "parsed": _extract_xml_text(root),
+        }
+    except etree.XMLSyntaxError as exc:
+        if "amplification" in str(exc).lower():
+            return {
+                "blocked_by": "lxml / libxml2 (not defusedxml)",
+                "reason": "Maximum entity amplification factor exceeded",
+                "finding": (
+                    "lxml's underlying C library (libxml2) has a built-in amplification "
+                    "limit that stops billion-laughs expansion before it consumes memory. "
+                    "This is defence-in-depth at the C library level — but it is NOT "
+                    "something every XML parser provides. Older parsers (Python's stdlib "
+                    "xml.etree before 3.8, PHP's SimpleXML, Java's DocumentBuilder with "
+                    "default settings) have no such limit and will exhaust RAM. "
+                    "defusedxml blocks it earlier and more explicitly, at the Python layer."
+                ),
+            }
+        return {"error": f"XML parse error: {exc}"}
+
+
+@app.post("/secure/xxe", tags=["Secure - Educational"])
+@limiter.limit("20/minute")
+async def secure_xxe(request: Request, demo: str | None = None):
+    """
+    SECURE: Parses XML using defusedxml, which forbids external entities, DTDs,
+    and recursive entity expansion (billion laughs).
+
+    Supports the same ?demo= targets as /vuln/xxe so you can compare results
+    side-by-side without changing the payload.
+
+    curl -X POST "http://localhost:8000/secure/xxe?demo=secrets"
+    curl -X POST "http://localhost:8000/secure/xxe?demo=billion_laughs"
+    """
+    if demo:
+        target = _DEMO_TARGETS.get(demo)
+        if not target:
+            return {"error": f"Unknown demo target '{demo}'. Available: {list(_DEMO_TARGETS)}"}
+        body = target.read_bytes() if demo == "billion_laughs" else _build_demo_payload(target)
+    else:
+        body = await request.body()
+    try:
+        # SECURE: defusedxml raises DefusedXmlException for any dangerous construct
+        root = safe_xml.fromstring(body.decode())
+        result = {}
+        for elem in root.iter():
+            if elem.text and elem.text.strip():
+                result[elem.tag] = elem.text.strip()
+        return {
+            "note": "SECURE endpoint — parsed safely with defusedxml",
+            "parsed": result,
+        }
+    except Exception as exc:
+        return {
+            "blocked": True,
+            "reason": type(exc).__name__,
+            "detail": str(exc),
+            "note": "defusedxml blocked a dangerous XML construct",
+        }
