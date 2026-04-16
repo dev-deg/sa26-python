@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Depends, HTTPException, status
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 
 from jose import JWTError, jwt
@@ -79,6 +81,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -126,8 +131,8 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
 @app.get("/", tags=["Public"])
 @limiter.limit("60/minute")
 def root(request: Request):
-    """Health-check - no authentication required"""
-    return {"status": "ok", "message": "Secure API Demo is running!"}
+    """Return a simple index.html page (inside the templates folder)"""
+    return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/public/status", tags=["Public"])
 @limiter.limit("60/minute")
