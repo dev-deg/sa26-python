@@ -16,6 +16,7 @@ loguru==0.7.3
 lxml==6.0.4
 MarkupSafe==3.0.3
 packaging==26.0
+cryptography==46.0.7
 passlib==1.7.4
 pyasn1==0.6.2
 pydantic==2.12.5
