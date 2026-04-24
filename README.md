@@ -43,3 +43,10 @@ uvicorn main:app --reload
 ```python
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+## Installing Jupyter Notebook
+
+```bash
+pip install jupyterlab
+jupyter lab
+```

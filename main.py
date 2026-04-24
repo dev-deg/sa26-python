@@ -1,5 +1,6 @@
 import logging
 import sys
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -238,6 +239,37 @@ _DEMO_TARGETS = {
     "billion_laughs": Path(__file__).parent / "attack_files" / "xxe_billion_laughs.xml",
 }
 
+# ── SQLite Demo Setup ─────────────────────────────────────────────────────────
+
+_DB_PATH = Path(__file__).parent / "demo_users.db"
+
+def _init_demo_db():
+    """Create and seed an in-memory-style SQLite DB for the SQL injection demos."""
+    con = sqlite3.connect(_DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            email    TEXT NOT NULL,
+            role     TEXT NOT NULL DEFAULT 'user'
+        )
+    """)
+    cur.execute("SELECT COUNT(*) FROM users")
+    if cur.fetchone()[0] == 0:
+        cur.executemany(
+            "INSERT INTO users (username, email, role) VALUES (?, ?, ?)",
+            [
+                ("alice", "alice@example.com", "admin"),
+                ("bob",   "bob@example.com",   "user"),
+                ("charlie", "charlie@example.com", "user"),
+            ],
+        )
+    con.commit()
+    con.close()
+
+_init_demo_db()
+
 def _build_demo_payload(target: Path) -> bytes:
     """Generate an XXE payload that reads target using the correct absolute URI for this OS."""
     uri = target.as_uri()   # file:///absolute/path — works on Windows and Unix
@@ -334,3 +366,134 @@ async def secure_xxe(request: Request, demo: str | None = None):
             "detail": str(exc),
             "note": "defusedxml blocked a dangerous XML construct",
         }
+
+# ── SQL Injection Demo Endpoints ─────────────────────────────────────────────
+
+def _get_db():
+    con = sqlite3.connect(_DB_PATH)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+@app.get("/vuln/sqli", tags=["Vulnerable - Educational"])
+@limiter.limit("60/minute")
+def vulnerable_sqli(request: Request, username: str = "alice"):
+    """
+    VULNERABLE: Looks up a user by username using **string interpolation**,
+    which allows SQL injection.
+
+    Safe example  → /vuln/sqli?username=alice
+    Inject all    → /vuln/sqli?username=' OR '1'='1
+    Dump schema   → /vuln/sqli?username=' UNION SELECT 1,sql,3,4 FROM sqlite_master--
+    """
+    query = f"SELECT id, username, email, role FROM users WHERE username = '{username}'"
+    logger.warning(f"[VULN SQLi] Executing: {query}")
+    try:
+        con = _get_db()
+        # VULNERABLE: raw string interpolation allows injected SQL to run -> con.execute(query)
+        rows = con.execute(query).fetchall()
+        con.close()
+        return {
+            "warning": "VULNERABLE endpoint — raw string interpolation used in SQL query",
+            "query_executed": query,
+            "results": [dict(r) for r in rows],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "query_attempted": query}
+
+
+@app.get("/secure/sqli", tags=["Secure - Educational"])
+@limiter.limit("60/minute")
+def secure_sqli(request: Request, username: str = "alice"):
+    """
+    SECURE: Looks up a user by username using a **parameterised query**,
+    which prevents SQL injection — the injected string is treated as data,
+    not as SQL code.
+
+    Safe example  → /secure/sqli?username=alice
+    Inject attempt → /secure/sqli?username=' OR '1'='1   (returns no rows)
+    """
+    query = "SELECT id, username, email, role FROM users WHERE username = ?"
+    logger.info(f"[SECURE SQLi] Executing parameterised query for username={username!r}")
+    con = _get_db()
+    # SECURE: parameterised query prevents injection — the ? placeholder is replaced safely by the value in the tuple (username,) -> con.execute(query, (username,))
+    rows = con.execute(query, (username,)).fetchall()
+    con.close()
+    return {
+        "note": "SECURE endpoint — parameterised query used, injection not possible",
+        "results": [dict(r) for r in rows],
+    }
+
+
+# ── Log Injection Demo Endpoints ──────────────────────────────────────────────
+
+@app.get("/vuln/log-injection", tags=["Vulnerable - Educational"])
+@limiter.limit("60/minute")
+def vulnerable_log_injection(request: Request, username: str = "alice"):
+    """
+    VULNERABLE: Logs user-supplied input directly without any sanitisation.
+
+    An attacker can inject fake log entries by embedding newline characters,
+    which causes the logger to write additional, spoofed lines.
+
+    Safe example    → /vuln/log-injection?username=alice
+    Inject example  → /vuln/log-injection?username=alice%0A2026-04-24+12:00:00+|+INFO+|+Fake+log+entry+injected+by+attacker
+    """
+    # VULNERABLE: user-controlled value interpolated directly into the log message
+    # A newline in `username` will break the log into multiple lines, letting an
+    # attacker forge entries that look like genuine log records.
+    logger.warning(f"[VULN LOG] Login attempt for username: {username}")
+    return {
+        "warning": "VULNERABLE endpoint — user input logged without sanitisation",
+        "username_received": username,
+        "tip": (
+            "Try passing a newline in the username parameter, e.g. "
+            "?username=alice%0A2026-04-24+12:00:00+|+INFO+|+Fake+entry"
+        ),
+    }
+
+
+@app.get("/secure/log-injection/v1", tags=["Secure - Educational"])
+@limiter.limit("60/minute")
+def secure_log_injection(request: Request, username: str = "alice"):
+    """
+    SECURE: Sanitises user-supplied input before logging by stripping (or
+    replacing) newline and carriage-return characters, which eliminates the
+    ability to inject forged log lines.
+
+    Safe example    → /secure/log-injection?username=alice
+    Inject attempt  → /secure/log-injection?username=alice%0AFake+log+entry  (newline stripped)
+    """
+    # SECURE: remove CR / LF characters so injected newlines cannot forge new log lines
+    sanitised_username = username.replace("\n", " ").replace("\r", " ")
+    logger.info(f"[SECURE LOG] Login attempt for username: {sanitised_username!r}")
+    return {
+        "note": "SECURE endpoint — newline characters stripped before logging",
+        "username_received": username,
+        "username_logged": sanitised_username,
+    }
+
+@app.get("/secure/log-injection/v2", tags=["Secure - Educational"])
+@limiter.limit("60/minute")
+def secure_log_injection(request: Request, username: str = "alice"):
+    """
+    SECURE: Sanitises user-supplied input before logging by stripping (or
+    replacing) newline and carriage-return characters, which eliminates the
+    ability to inject forged log lines.
+
+    Safe example    → /secure/log-injection?username=alice
+    Inject attempt  → /secure/log-injection?username=alice%0AFake+log+entry  (newline stripped)
+    """
+    # SECURE: pass the untrusted value as a positional argument to the logger,
+    # using a {} placeholder in the format string — equivalent to printf's "%s"
+    # parameterised approach.  Loguru (like Python's stdlib logging with "%s")
+    # keeps the format string and the value separate; the value is never
+    # concatenated into the template, so a newline inside `username` cannot
+    # break the record into multiple lines or forge new log entries.
+    # This is analogous to: logger.info("Login attempt for username: %s", username)
+    # in stdlib logging, but loguru uses {} placeholders instead of %s.
+    logger.info("[SECURE LOG] Login attempt for username: {}", username)
+    return {
+        "note": "SECURE endpoint — value passed as positional argument (parameterised), not interpolated into the format string",
+        "username_received": username,
+    }
