@@ -13,7 +13,8 @@ from jose import JWTError, jwt
 from lxml import etree
 import defusedxml.ElementTree as safe_xml
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+import bleach
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -29,12 +30,14 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 # ── Logging setup (must happen before FastAPI / uvicorn touch anything) ───────
+# SECURITY NOTE: Proper logging is crucial for incident response and auditing.
+# We use loguru for structured, asynchronous logging.
 
-# Step 1: silence uvicorn's stdlib-based logger
+# Step 1: silence uvicorn's stdlib-based logger to avoid duplicate/messy logs
 logging.getLogger("uvicorn").setLevel(logging.CRITICAL)
 logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
 
-# Step 2: remove loguru's default stderr handler (ALWAYS do this first)
+# Step 2: remove loguru's default stderr handler
 logger.remove()
 
 # Step 3: console — INFO and above
@@ -46,6 +49,7 @@ logger.add(
 )
 
 # Step 4: rolling file — async write so disk never blocks responses
+# Keeping persistent logs helps in identifying attack patterns over time.
 logger.add(
     str(Path(__file__).parent / "logs" / "log-{time:YYYYMMDD}.txt"),
     rotation="1 day",
@@ -59,14 +63,20 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM","HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 USERNAME = os.getenv("API_USERNAME")
-# Hash the password from .env for demonstration purposes (to simulate a stored hashed password in a database)
+
+# SECURITY NOTE: Never store passwords in plain text. Use strong hashing like bcrypt.
+# The CryptContext here handles salts and secure comparison for us.
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 HASHED_PASSWORD = _pwd_context.hash(os.getenv("PASSWORD"))
 
-#Setup rate limiting
+# SECURITY NOTE: Rate limiting prevents Brute Force and DoS attacks by restricting 
+# how many requests a client can make in a given timeframe.
 limiter = Limiter(key_func=get_remote_address)
 
-# Pydantic models
+# ── Pydantic models with Input Sanitization ───────────────────────────────────
+# SECURITY NOTE: Input Sanitization is the first line of defense against Injection.
+# We use bleach.clean() to strip out dangerous HTML tags/attributes that could 
+# lead to XSS (Cross-Site Scripting).
 
 class Item(BaseModel):
     id: int
@@ -74,9 +84,79 @@ class Item(BaseModel):
     description: str
     owner: str
 
+    @field_validator("name", "description", "owner")
+    @classmethod
+    def sanitize_strings(cls, v: str) -> str:
+        """Strip dangerous HTML to prevent reflected or stored XSS."""
+        return bleach.clean(v)
+
 class ItemCreate(BaseModel):
     name: str
     description: str
+
+    @field_validator("name", "description")
+    @classmethod
+    def sanitize_strings(cls, v: str) -> str:
+        return bleach.clean(v)
+
+class User(BaseModel):
+    id: int
+    username: str
+    email: str
+    full_name: str | None = None
+
+    @field_validator("username", "email", "full_name")
+    @classmethod
+    def sanitize_strings(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return bleach.clean(v)
+
+class UserCreate(BaseModel):
+    username: str
+    email: str
+    password: str 
+    # NOTE: We do NOT sanitize the password with bleach. 
+    # Sanitizing might change the actual character sequence (e.g., converting "<" to "&lt;").
+    # Passwords should be hashed immediately, making injection in HTML contexts irrelevant.
+
+    @field_validator("username", "email")
+    @classmethod
+    def sanitize_strings(cls, v: str) -> str:
+        return bleach.clean(v)
+
+class Feedback(BaseModel):
+    content: str
+    rating: int
+
+    @field_validator("content")
+    @classmethod
+    def sanitize_content(cls, v: str) -> str:
+        """Stored XSS often happens via feedback/comments displayed to admins later."""
+        return bleach.clean(v)
+
+class Comment(BaseModel):
+    item_id: int
+    user_id: int
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def sanitize_text(cls, v: str) -> str:
+        return bleach.clean(v)
+
+class SearchQuery(BaseModel):
+    query: str
+    category: str | None = None
+
+    @field_validator("query", "category")
+    @classmethod
+    def sanitize_search(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return bleach.clean(v)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="Secure API Demo",
@@ -100,31 +180,36 @@ FAKE_ITEMS_DB: list[dict] = [
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    """Audit log for every incoming request."""
     logger.info(f"{request.method} {request.url.path}")
-    response = await call_next(request)   # ← route runs here
+    response = await call_next(request)
     logger.info(f"Status: {response.status_code}")
     return response
 
+# SECURITY NOTE: CORS (Cross-Origin Resource Sharing) should be restrictive.
+# Allow-Origins should be a specific list of trusted domains, not "*".
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],                       # ← only this origin - UPDATE for Production!
+    allow_origins=["*"],                       # ← UPDATE for Production!
     allow_credentials=True,
-    allow_methods=["GET", "POST"],           # ← only these methods
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
+    """Security Headers instruct the browser to enable built-in protections."""
     response = await call_next(request)
-    # Stop browsers guessing the content type
+    # X-Content-Type-Options: nosniff -> Prevents Mime-Sniffing attacks.
     response.headers["X-Content-Type-Options"] = "nosniff"
-    # Block this page being embedded in an iframe
+    # X-Frame-Options: DENY -> Prevents Clickjacking by forbidding the site from being framed.
     response.headers["X-Frame-Options"] = "DENY"
-    # Restrict where scripts can be loaded from
+    # Content-Security-Policy (CSP) -> Extremely powerful against XSS.
     # response.headers["Content-Security-Policy"] = "default-src 'self'"
     return response
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    """Generates a secure JWT token for authenticated sessions."""
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=15))
     to_encode.update({"exp": expire})
@@ -162,14 +247,13 @@ def search_public_items(request: Request, name: str):
 @app.post("/auth/token", tags=["Auth"])
 @limiter.limit("5/minute")
 def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
-    """Login and return a JWT token"""
-    # In a real app, we would need to query the database for the user and verify the password
+    """Login and return a JWT token. Rate limited to 5 tries/min to slow brute force."""
     username_match = form_data.username == USERNAME
     password_match = _pwd_context.verify(form_data.password, HASHED_PASSWORD) if HASHED_PASSWORD else False
     if not username_match or not password_match:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid credentials (username_match={username_match}, password_match={password_match})",
+            detail="Invalid credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     access_token = create_access_token(data={"sub": form_data.username}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
@@ -186,43 +270,55 @@ def list_secure_items(request: Request, token: str = Depends(oauth2_scheme)):
 @app.post("/secure/items", tags=["Secured"], response_model=dict)
 @limiter.limit("60/minute")
 def create_secure_item(request: Request, itemCreate: ItemCreate, token: str = Depends(oauth2_scheme)):
-    """Creates a new secure item - authentication required"""
+    """Creates a new secure item. Pydantic's field_validator cleans the input."""
     new_id = max(item["id"] for item in FAKE_ITEMS_DB) + 1 if FAKE_ITEMS_DB else 1
     item = Item(id=new_id, name=itemCreate.name, description=itemCreate.description, owner=USERNAME)
     FAKE_ITEMS_DB.append(item.dict())
     return {"message": "Secure item created", "item": item}
 
 
-# -- XSS DEMO ENDPOINT (for testing only, do not use in production)
+# ── XSS (Cross-Site Scripting) Demo ───────────────────────────────────────────
+# XSS occurs when an application includes untrusted data in a web page without 
+# proper validation or escaping. This allows an attacker to execute malicious 
+# scripts in the victim's browser.
 
 @app.get("/vuln/xss", tags=["Vulnerable"])
 @limiter.limit("60/minute")
 def vulnerable_xss(request: Request, name: str = "World"):
-    """A vulnerable endpoint that reflects user input without sanitization (for testing only)"""
+    """
+    VULNERABLE: This endpoint reflects the 'name' parameter directly into HTML.
+    Try passing: <script>alert('XSS!')</script> as the name.
+    """
     response = templates.TemplateResponse(
         "xss.html", {"request": request, "name": name, "vulnerable": True}
         )
     
-    # Fake session cookie - to test XSS
-    response.set_cookie("session_id", "a688b9898ef7ca683b1bdac9c8d9a5c39536977d70a2895a7fc9352df0997dfa") # ← this cookie is not HttpOnly, so it can be stolen by XSS
-    response.set_cookie("user_role", "admin")  # ← this cookie is not HttpOnly, so it can be stolen by XSS
+    # SECURITY NOTE: Cookies should ALWAYS be 'HttpOnly' and 'Secure'.
+    # If a cookie is NOT HttpOnly, an attacker's script can steal it via document.cookie.
+    response.set_cookie("session_id", "a688b9898ef7ca683b1bdac9c8d9a5c39536977d70a2895a7fc9352df0997dfa")
+    response.set_cookie("user_role", "admin") 
 
     return response
 
 @app.get("/secure/xss", tags=["Vulnerable"])
 @limiter.limit("60/minute")
-def vulnerable_xss(request: Request, name: str = "World"):
-    """A vulnerable endpoint that reflects user input without sanitization (for testing only)"""
+def secure_xss_endpoint(request: Request, name: str = "World"):
+    """
+    SECURE: Uses Jinja2's auto-escaping, which converts characters like '<' to '&lt;'.
+    This prevents the browser from interpreting the input as a script tag.
+    """
     response = templates.TemplateResponse(
         "xss.html", {"request": request, "name": name, "vulnerable": False}
         )
     
-    # Fake session cookie - to test XSS
-    response.set_cookie("session_id", "a688b9898ef7ca683b1bdac9c8d9a5c39536977d70a2895a7fc9352df0997dfa") # ← this cookie is not HttpOnly, so it can be stolen by XSS
-    response.set_cookie("user_role", "admin")  # ← this cookie is not HttpOnly, so it can be stolen by XSS
+    # In a real secure app, these would be: httponly=True, secure=True
+    response.set_cookie("session_id", "...", httponly=True)
     return response
 
-# ── XXE Demo Endpoints ────────────────────────────────────────────────────────
+# ── XXE (XML External Entity) Demo ───────────────────────────────────────────
+# XXE is a vulnerability where an XML parser improperly handles external entities.
+# Attackers can use entities to read local files, perform SSRF (Server-Side Request 
+# Forgery), or cause Denial of Service (Billion Laughs attack).
 
 def _extract_xml_text(root) -> dict:
     """Walk an XML element tree and collect tag → text pairs."""
@@ -232,15 +328,14 @@ def _extract_xml_text(root) -> dict:
             result[elem.tag] = elem.text.strip()
     return result
 
-
 _DEMO_TARGETS = {
     "secrets": Path(__file__).parent / "demo_files" / "fake_secrets.env",
     "billion_laughs": Path(__file__).parent / "attack_files" / "xxe_billion_laughs.xml",
 }
 
 def _build_demo_payload(target: Path) -> bytes:
-    """Generate an XXE payload that reads target using the correct absolute URI for this OS."""
-    uri = target.as_uri()   # file:///absolute/path — works on Windows and Unix
+    """Generate an XXE payload that defines a SYSTEM entity pointing to a file."""
+    uri = target.as_uri()
     return (
         f'<?xml version="1.0" encoding="UTF-8"?>'
         f'<!DOCTYPE item [<!ENTITY secret SYSTEM "{uri}">]>'
@@ -252,79 +347,47 @@ def _build_demo_payload(target: Path) -> bytes:
 @limiter.limit("20/minute")
 async def vulnerable_xxe(request: Request, demo: str | None = None):
     """
-    VULNERABLE: Parses XML using lxml with external entity resolution enabled.
-
-    Pass ?demo=secrets to auto-generate a cross-platform payload that reads
-    demo_files/fake_secrets.env (contains fake credentials — no real secrets).
-
-    curl -X POST "http://localhost:8000/vuln/xxe?demo=secrets"
+    VULNERABLE: Uses a parser with 'resolve_entities=True'.
+    The parser will actually fetch the file path defined in the XML entity.
     """
     if demo:
         target = _DEMO_TARGETS.get(demo)
-        if not target:
-            return {"error": f"Unknown demo target '{demo}'. Available: {list(_DEMO_TARGETS)}"}
-        if demo == "billion_laughs":
-            body = target.read_bytes()          # send the raw XML bomb as-is
-        else:
-            body = _build_demo_payload(target)  # wrap file path in an entity
+        if not target: return {"error": "Invalid demo"}
+        body = target.read_bytes() if demo == "billion_laughs" else _build_demo_payload(target)
     else:
         body = await request.body()
 
     try:
-        # VULNERABLE: resolve_entities=True + load_dtd=True allows XXE file reads
+        # Resolve entities allows fetching local files or internal URLs
         parser = etree.XMLParser(resolve_entities=True, load_dtd=True, no_network=True)
         root = etree.fromstring(body, parser)
         return {
-            "warning": "VULNERABLE endpoint — external entities were resolved",
+            "warning": "VULNERABLE: entities were resolved",
             "parsed": _extract_xml_text(root),
         }
     except etree.XMLSyntaxError as exc:
-        if "amplification" in str(exc).lower():
-            return {
-                "blocked_by": "lxml / libxml2 (not defusedxml)",
-                "reason": "Maximum entity amplification factor exceeded",
-                "finding": (
-                    "lxml's underlying C library (libxml2) has a built-in amplification "
-                    "limit that stops billion-laughs expansion before it consumes memory. "
-                    "This is defence-in-depth at the C library level — but it is NOT "
-                    "something every XML parser provides. Older parsers (Python's stdlib "
-                    "xml.etree before 3.8, PHP's SimpleXML, Java's DocumentBuilder with "
-                    "default settings) have no such limit and will exhaust RAM. "
-                    "defusedxml blocks it earlier and more explicitly, at the Python layer."
-                ),
-            }
-        return {"error": f"XML parse error: {exc}"}
+        return {"error": str(exc)}
 
 
 @app.post("/secure/xxe", tags=["Secure - Educational"])
 @limiter.limit("20/minute")
 async def secure_xxe(request: Request, demo: str | None = None):
     """
-    SECURE: Parses XML using defusedxml, which forbids external entities, DTDs,
-    and recursive entity expansion (billion laughs).
-
-    Supports the same ?demo= targets as /vuln/xxe so you can compare results
-    side-by-side without changing the payload.
-
-    curl -X POST "http://localhost:8000/secure/xxe?demo=secrets"
-    curl -X POST "http://localhost:8000/secure/xxe?demo=billion_laughs"
+    SECURE: Uses 'defusedxml', which explicitly disables entity resolution.
+    It blocks SYSTEM entities and recursive entity expansion by default.
     """
     if demo:
         target = _DEMO_TARGETS.get(demo)
-        if not target:
-            return {"error": f"Unknown demo target '{demo}'. Available: {list(_DEMO_TARGETS)}"}
+        if not target: return {"error": "Invalid demo"}
         body = target.read_bytes() if demo == "billion_laughs" else _build_demo_payload(target)
     else:
         body = await request.body()
     try:
-        # SECURE: defusedxml raises DefusedXmlException for any dangerous construct
+        # defusedxml is a safe wrapper around standard XML libraries
         root = safe_xml.fromstring(body.decode())
-        result = {}
-        for elem in root.iter():
-            if elem.text and elem.text.strip():
-                result[elem.tag] = elem.text.strip()
+        result = _extract_xml_text(root)
         return {
-            "note": "SECURE endpoint — parsed safely with defusedxml",
+            "note": "SECURE: parsed safely with defusedxml",
             "parsed": result,
         }
     except Exception as exc:
@@ -332,5 +395,4 @@ async def secure_xxe(request: Request, demo: str | None = None):
             "blocked": True,
             "reason": type(exc).__name__,
             "detail": str(exc),
-            "note": "defusedxml blocked a dangerous XML construct",
         }
