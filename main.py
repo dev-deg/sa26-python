@@ -1,5 +1,6 @@
 import logging
 import sys
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -333,6 +334,37 @@ _DEMO_TARGETS = {
     "billion_laughs": Path(__file__).parent / "attack_files" / "xxe_billion_laughs.xml",
 }
 
+# ── SQLite Demo Setup ─────────────────────────────────────────────────────────
+
+_DB_PATH = Path(__file__).parent / "demo_users.db"
+
+def _init_demo_db():
+    """Create and seed an in-memory-style SQLite DB for the SQL injection demos."""
+    con = sqlite3.connect(_DB_PATH)
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL,
+            email    TEXT NOT NULL,
+            role     TEXT NOT NULL DEFAULT 'user'
+        )
+    """)
+    cur.execute("SELECT COUNT(*) FROM users")
+    if cur.fetchone()[0] == 0:
+        cur.executemany(
+            "INSERT INTO users (username, email, role) VALUES (?, ?, ?)",
+            [
+                ("alice", "alice@example.com", "admin"),
+                ("bob",   "bob@example.com",   "user"),
+                ("charlie", "charlie@example.com", "user"),
+            ],
+        )
+    con.commit()
+    con.close()
+
+_init_demo_db()
+
 def _build_demo_payload(target: Path) -> bytes:
     """Generate an XXE payload that defines a SYSTEM entity pointing to a file."""
     uri = target.as_uri()
@@ -347,7 +379,7 @@ def _build_demo_payload(target: Path) -> bytes:
 @limiter.limit("20/minute")
 async def vulnerable_xxe(request: Request, demo: str | None = None):
     """
-    VULNERABLE: Uses a parser with 'resolve_entities=True'.
+    VULNERABLE: Parses XML using lxml with external entity resolution enabled.
     The parser will actually fetch the file path defined in the XML entity.
     """
     if demo:
@@ -395,4 +427,107 @@ async def secure_xxe(request: Request, demo: str | None = None):
             "blocked": True,
             "reason": type(exc).__name__,
             "detail": str(exc),
+            "note": "defusedxml blocked a dangerous XML construct",
         }
+
+# ── SQL Injection Demo Endpoints ─────────────────────────────────────────────
+
+def _get_db():
+    con = sqlite3.connect(_DB_PATH)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+@app.get("/vuln/sqli", tags=["Vulnerable - Educational"])
+@limiter.limit("60/minute")
+def vulnerable_sqli(request: Request, username: str = "alice"):
+    """
+    VULNERABLE: Looks up a user by username using **string interpolation**,
+    which allows SQL injection.
+
+    Safe example  → /vuln/sqli?username=alice
+    Inject all    → /vuln/sqli?username=' OR '1'='1
+    Dump schema   → /vuln/sqli?username=' UNION SELECT 1,sql,3,4 FROM sqlite_master--
+    """
+    query = f"SELECT id, username, email, role FROM users WHERE username = '{username}'"
+    logger.warning(f"[VULN SQLi] Executing: {query}")
+    try:
+        con = _get_db()
+        # VULNERABLE: raw string interpolation allows injected SQL to run
+        rows = con.execute(query).fetchall()
+        con.close()
+        return {
+            "warning": "VULNERABLE endpoint — raw string interpolation used in SQL query",
+            "query_executed": query,
+            "results": [dict(r) for r in rows],
+        }
+    except Exception as exc:
+        return {"error": str(exc), "query_attempted": query}
+
+
+@app.get("/secure/sqli", tags=["Secure - Educational"])
+@limiter.limit("60/minute")
+def secure_sqli(request: Request, username: str = "alice"):
+    """
+    SECURE: Looks up a user by username using a **parameterised query**,
+    which prevents SQL injection.
+    """
+    query = "SELECT id, username, email, role FROM users WHERE username = ?"
+    logger.info(f"[SECURE SQLi] Executing parameterised query for username={username!r}")
+    con = _get_db()
+    # SECURE: parameterised query prevents injection
+    rows = con.execute(query, (username,)).fetchall()
+    con.close()
+    return {
+        "note": "SECURE endpoint — parameterised query used, injection not possible",
+        "results": [dict(r) for r in rows],
+    }
+
+
+# ── Log Injection Demo Endpoints ──────────────────────────────────────────────
+
+@app.get("/vuln/log-injection", tags=["Vulnerable - Educational"])
+@limiter.limit("60/minute")
+def vulnerable_log_injection(request: Request, username: str = "alice"):
+    """
+    VULNERABLE: Logs user-supplied input directly without any sanitisation.
+    """
+    # VULNERABLE: user-controlled value interpolated directly into the log message
+    logger.warning(f"[VULN LOG] Login attempt for username: {username}")
+    return {
+        "warning": "VULNERABLE endpoint — user input logged without sanitisation",
+        "username_received": username,
+        "tip": (
+            "Try passing a newline in the username parameter, e.g. "
+            "?username=alice%0A2026-04-24+12:00:00+|+INFO+|+Fake+entry"
+        ),
+    }
+
+
+@app.get("/secure/log-injection/v1", tags=["Secure - Educational"])
+@limiter.limit("60/minute")
+def secure_log_injection_v1(request: Request, username: str = "alice"):
+    """
+    SECURE: Sanitises user-supplied input before logging by stripping newlines.
+    """
+    # SECURE: remove CR / LF characters
+    sanitised_username = username.replace("\n", " ").replace("\r", " ")
+    logger.info(f"[SECURE LOG] Login attempt for username: {sanitised_username!r}")
+    return {
+        "note": "SECURE endpoint — newline characters stripped before logging",
+        "username_received": username,
+        "username_logged": sanitised_username,
+    }
+
+@app.get("/secure/log-injection/v2", tags=["Secure - Educational"])
+@limiter.limit("60/minute")
+def secure_log_injection_v2(request: Request, username: str = "alice"):
+    """
+    SECURE: Pass untrusted values as separate arguments to the logger.
+    """
+    # SECURE: positional argument for logging
+    logger.info("[SECURE LOG] Login attempt for username: {}", username)
+    return {
+        "note": "SECURE endpoint — value passed as positional argument",
+        "username_received": username,
+    }
